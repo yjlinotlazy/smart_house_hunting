@@ -1,0 +1,1 @@
+"""Property result composition."""

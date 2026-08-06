@@ -10,9 +10,10 @@ This is the permanent product scope, not an MVP limitation:
 - Owner-occupied homes only. No rental or investment-property workflows.
 - Massachusetts only.
 - One or more target Massachusetts cities/towns are configured by the user.
-- The web server listens on `127.0.0.1` only. Publishing it beyond localhost is outside this project's scope.
+- The web server listens on `localhost`, port `7004`, by default. Publishing it beyond localhost is outside this project's scope.
 - The application is not a public service and does not need multi-user, account, role, or tenant support.
 - The application uses existing public listing and sold-home information. It does not predict sale prices or estimate future property values.
+- Git-tracked files must never contain personal information, private profile data, personal or network IP addresses, credentials, cookies, tokens, or machine-specific absolute paths. Documentation and examples use placeholders and `localhost` only.
 
 ## 2. Configuration and Private Profile
 
@@ -28,6 +29,17 @@ The configuration contains operational settings, including:
 - One or more target Massachusetts cities/towns.
 - LLM provider settings.
 - Financial-model assumptions.
+- The default down-payment percentage used when no household profile has been saved yet.
+- One or more included property types. The default local selection is `single_family` only.
+
+The home page links to a separate local configuration page. It defaults to a
+user-friendly sectioned form and can switch to a complete raw YAML editor. Fields
+with a fixed multi-value set, including property types and listing sources, use
+checklists. Saving either mode validates the entire configuration and atomically
+overwrites it only after validation succeeds. The other mode is refreshed after a
+successful save. Actual credentials must remain in environment variables; the YAML
+stores environment-variable names, not secret values. Invalid edits must leave the
+existing file unchanged.
 
 The household profile is a single YAML file at the configured path. It contains three freeform text fields:
 
@@ -62,6 +74,12 @@ backups/
 
 The user may configure multiple Massachusetts cities/towns. Candidate listings must be inside one of those configured municipalities.
 
+Candidate listings must also match one of `search.included_property_types`. Supported values are `single_family`, `condo`, `townhouse`, `multi_family`, `land`, `mobile`, and `other`. Changing this list permits an immediate scan because it changes the scan fingerprint.
+
+The search configuration also contains nonnegative minimum bedroom and bathroom counts. Half-unit values are allowed. Source adapters must apply these minimums to website searches when supported, and normalized results are filtered again locally.
+
+The search configuration contains a positive maximum purchase price. It is applied to source website filters, the scan fingerprint, normalized results, and the default Matching homes filter.
+
 The initial supported listing sources are:
 
 - Redfin
@@ -84,6 +102,15 @@ Deduplication should use, when available:
 - Property characteristics as supporting evidence.
 
 Source-specific listing IDs are not sufficient for cross-source identity. Conflicting source values must not be silently discarded; source values and provenance should be retained, with an explicit rule for choosing the primary displayed value.
+
+Living area and lot size are separate source facts. Lot size is normalized to square
+feet for storage and comparison; the UI also shows acres when useful. Unknown lot
+size remains `-` and is never inferred from living area.
+
+Candidate cards display the source lead image and year built when available. Missing
+images use a stable placeholder, and missing construction year remains `-`.
+
+For conflicting displayed facts, source priority is Redfin first, Zillow second, then all other sources. Lower-priority values remain visible as provenance and conflicts.
 
 ## 4. User-Controlled Workflow
 
@@ -113,9 +140,14 @@ The page displays the last scan time beside `GO`, including:
 Duplicate scans are prevented as follows:
 
 - `GO` is disabled while a scan is running.
+- Live scan progress separately displays detail successes, failures, in-progress work, and listings skipped because their required data was already complete earlier that local day.
 - The backend permits only one scan at a time, including requests from multiple browser tabs.
 - Scan state and timestamps persist across application restarts.
-- A recent completed scan causes a confirmation prompt rather than an unconditional hard block.
+- Each completed listing is committed immediately. A later source failure or server restart must not discard earlier results from the same scan.
+- Retrying a scan on the same local calendar day refreshes each town listing page but reuses only complete listing details. A listing is complete only when it has year built, bedroom count, bathroom count, price, at least one picture, lot size, living area, and status. A listing missing any required field is partial and its detail page is fetched again by ordinary `GO`.
+- `Force GO` bypasses same-day detail reuse. It downloads every discoverable listing detail again from every enabled source.
+- Within one source, a newly retrieved non-missing value supersedes the prior value. If the new response omits a field that the prior state knew, the new state retains that prior field. Historical states remain intact.
+- Repeated `GO` actions never require a recent-scan confirmation; the user controls when to run another incremental scan.
 - Changing the configured towns permits an immediate new scan.
 
 ### 4.2 `LLM Analysis`: Personalized Analysis
@@ -127,8 +159,11 @@ The LLM stage:
 - Evaluates each must-have as `meets`, `does not meet`, or `unknown`.
 - Never treats missing public information as a failed requirement.
 - Scores and explains good-to-have compatibility.
-- Produces a personalized ranking.
 - Produces a personalized overall evaluation for each property.
+- Uses the latest saved description and normalized detail facts from every source, with source URLs
+  retained as provenance; it does not assume the LLM can browse those URLs.
+- Produces and saves a cross-listing digest after the global action, covering top choices, explicit
+  must-have disqualifiers, tradeoffs, financial comparison, and shared unknowns.
 - Identifies the evidence and missing data behind its conclusions.
 
 The user may select a subset of properties for analysis. If nothing is selected, the button analyzes all current initial-selection results.
@@ -150,7 +185,12 @@ A `Force reanalysis` checkbox is displayed beside the LLM button.
 - When unchecked, only new, stale, changed, or previously failed analyses run.
 - When checked, cached results are ignored for the currently selected properties, or for all current results if none are selected.
 - Forced reanalysis does not fetch listing data.
-- Before using a cloud provider, the application shows the number of properties and asks for confirmation.
+- The per-property `LLM analysis` action always forces a new analysis for that property without a
+  confirmation dialog; the global action uses its separate `Force all` checkbox.
+- Per-property analysis does not regenerate the cross-listing digest. A global analysis reuses an
+  unchanged saved digest unless `Force all` is selected, and failed refreshes retain the prior digest.
+- Pressing `LLM Analysis` is the explicit authorization to send the saved profile and selected
+  property data to the configured provider; no redundant confirmation dialog is shown.
 - The newest result becomes the current result, while older analysis remains in history.
 - The checkbox resets to unchecked after the operation to prevent accidental repeated calls.
 
@@ -235,8 +275,19 @@ Each property page or result includes:
 - Personalized overall evaluation.
 - Data confidence, missing information, and source provenance where relevant.
 - Similar sold properties and their source links.
+- Nearby parks, stores, and other useful destinations with walking distance and duration when analyzed.
+- Persistent user-defined labels, initially offering `双黄线`, `Corner lot`, and `剪刀煞`.
+- A `Retrieved` or `Partially retrieved` card indicator based only on fields returned by crawls.
+- Manual fallback entry for fields missing from crawls.
 
-The browser interface allows the user to hide or collapse unimportant information.
+The browser interface allows the user to add labels from each property dropdown. Two top-level
+checkbox dropdowns require all selected labels or hide properties containing any selected label.
+These labels are human observations; Google Maps and the LLM do not set them automatically.
+
+Manual property values persist locally but have lower precedence than every crawled source. A later
+crawl value replaces the manual value for display and analysis; if the later crawl still omits that
+field, the manual fallback remains active. Manual values do not turn a partially retrieved crawl
+indicator into a retrieved one.
 
 ## 8. Comparable Sold Properties
 
@@ -257,7 +308,48 @@ Each sold comparable should include, when available:
 
 Similarity uses transparent rules such as municipality, recency, property type, size, bedrooms, and price range. Comparables should default to the same municipality; the application may expand to nearby municipalities when there are too few results, but must label that expansion clearly.
 
-## 9. Database and History
+## 9. Google Maps and Walkable Destinations
+
+The user can select any subset of current candidate properties and open them together in an interactive Google Map.
+
+Map behavior:
+
+- Only properties selected by the user are placed on the map.
+- Each property is shown as a distinct marker.
+- Selecting a marker shows the property summary and a link back to its local detail page.
+- The map automatically fits the selected markers.
+- Mapping is an explicit user action and is not loaded during `GO` or LLM analysis.
+
+For a selected property, the user can explicitly request research into useful places that can actually be reached on foot, including at least:
+
+- Parks and public green spaces.
+- Grocery stores and supermarkets.
+- General stores and shopping destinations.
+- Cafes and restaurants.
+- Pharmacies and other useful daily services when available.
+
+Nearby-place analysis must not use straight-line radius alone. It uses nearby-place discovery followed by walking-route distance and duration where Google provides a route. Results display:
+
+- Place name and category.
+- Actual walking duration and distance when available.
+- A Google Maps link.
+- Retrieval time.
+- Missing route or place information.
+
+The application should show useful time buckets such as short, moderate, and longer walks, while retaining the actual duration so the user can make the final judgment. It does not claim that every suggested route is safe, accessible, or pleasant; Google route results and public data are evidence, not a guarantee.
+
+Cost and privacy controls:
+
+- Nearby-place and walking-route calls run only after an explicit user action.
+- The UI shows how many selected properties will be analyzed before paid Google calls are made.
+- Cached fresh results are reused by default; a separate refresh action bypasses the cache.
+- The UI clearly states that selected property coordinates and map activity are sent to Google.
+- Missing credentials, quota exhaustion, billing errors, or Google service failures are visible and do not affect locally stored property data.
+- Google-derived data is stored and refreshed only as permitted by the applicable Google Maps Platform policies.
+
+Google Maps credentials remain in local private configuration or environment variables and are never committed. Browser and backend credentials are separate: the browser Maps JavaScript key is restricted for local web use and the backend Places/Routes key is never sent to the browser.
+
+## 10. Database and History
 
 All scanned properties and source records are stored locally. The data model must distinguish:
 
@@ -266,6 +358,12 @@ All scanned properties and source records are stored locally. The data model mus
 - A timestamped listing snapshot.
 - A status or price event.
 - A versioned LLM evaluation.
+
+Every received listing-source HTTP response body is saved locally before parsing,
+including successful, blocked, unavailable, and unrecognized-layout responses. Bodies
+are stored losslessly compressed with retrieval metadata so parsing can be replayed
+without another download. Response headers, cookies, and tokens are not retained.
+Payload files remain outside the repository and use restrictive permissions.
 
 The application retains properties after they disappear from active search results. It tracks at least:
 

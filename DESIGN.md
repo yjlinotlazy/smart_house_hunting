@@ -37,6 +37,7 @@ The main technical risk is source acquisition. Public websites can change markup
 - Native `fetch` for JSON APIs
 - Server-Sent Events for job progress
 - CSS Modules or plain scoped CSS
+- Google Maps JavaScript API for explicitly selected property markers
 
 React Router should be added only if the interface grows beyond a results page and a property-detail route. Redux, Next.js, SSR, Tailwind, and a production Node server are not required.
 
@@ -61,7 +62,7 @@ Default paths:
 ~/.local/state/smart_house_hunting/app.log
 ```
 
-The server binds only to `127.0.0.1`. FastAPI serves both `/api/*` and the compiled React assets.
+The server binds to `localhost` on port `7004` by default. FastAPI serves both `/api/*` and the compiled React assets.
 
 The application uses one web process and one in-process job worker. No Celery, Redis, PostgreSQL, or separate frontend server is used in production.
 
@@ -117,6 +118,11 @@ smart_house_hunting/
       prompts.py
       schemas.py
       service.py
+    maps/
+      models.py
+      places.py
+      routes.py
+      service.py
     services/
       scan.py
       property.py
@@ -151,12 +157,16 @@ profile_file: /private/path/house_profile.yaml
 search:
   state: MA
   municipalities:
-    - Lexington
-    - Arlington
-  recent_scan_confirmation_minutes: 30
+    - "<town-one>"
+    - "<town-two>"
+  included_property_types:
+    - single_family
+  minimum_bedrooms: 0
+  minimum_bathrooms: 0
 
 finance:
   mortgage_years: 30
+  default_down_payment_percent: 20
   annual_interest_rate:
     low: 0.060
     high: 0.075
@@ -179,14 +189,21 @@ llm:
       api_key: "..."
       model: "..."
     ollama:
-      base_url: http://127.0.0.1:11434/v1
+      base_url: http://localhost:11434/v1
       api_key: dummy
       model: "..."
+
+maps:
+  enabled: false
+  browser_api_key_env: GOOGLE_MAPS_BROWSER_API_KEY
+  backend_api_key_env: GOOGLE_MAPS_BACKEND_API_KEY
+  nearby_search_radius_meters: 2500
+  cache_days: 14
 ```
 
 Rates above are examples, not product-prescribed defaults. They must be reviewed when the implementation reaches financial configuration.
 
-Provider-specific environment variables may override secrets and endpoint settings. API keys are backend-only, masked in settings responses, and never logged.
+Provider-specific environment variables may override secrets and endpoint settings. LLM and backend service keys are backend-only, masked in settings responses, and never logged. The restricted Google Maps JavaScript browser key is the sole planned exception because that SDK executes in the browser.
 
 ### 5.2 Household Profile
 
@@ -244,11 +261,17 @@ One physical property or condo unit:
 - Unit number.
 - Coordinates.
 - Parcel or assessor identifier when known.
+- Persistent user-defined manual-review tags, with 双黄线, Corner lot, and 剪刀煞 as defaults.
+- Manual fallback property facts stored separately from crawled listing states.
 - Creation and update timestamps.
 
 #### `property_aliases`
 
 Normalized addresses, source identities, and other match keys that resolve to a property. This makes deduplication explainable and allows a bad match to be corrected without destroying source data.
+
+#### `property_duplicate_candidates`
+
+Reversible links between records that may represent the same property but lack enough evidence for an automatic merge. The reason, confidence, and review status remain inspectable.
 
 #### `listings`
 
@@ -273,6 +296,10 @@ The top-level `GO` job, including status, configuration fingerprint, timestamps,
 #### `scan_source_runs`
 
 One row per source per scan, with independent status, counts, timing, parser version, and error details.
+
+#### `scan_progress_events`
+
+Append-only progress records written before SSE delivery. Event IDs support browser reconnect and replay.
 
 #### `scan_observations`
 
@@ -308,6 +335,24 @@ One versioned property evaluation with:
 - Missing information.
 - Status and error summary.
 
+#### `llm_digests`
+
+One versioned, persisted cross-listing comparison linked to an LLM run. Its cache identity includes
+the profile, current per-property evaluation inputs, provider, model, and digest prompt version. A
+successful refresh becomes current while older and failed attempts remain available.
+
+#### `places`
+
+Google Place identity and policy-permitted cached fields, including place ID, coordinates, categories, retrieval time, and refresh metadata.
+
+#### `property_place_walks`
+
+Links a property and place with walking-route distance, duration, route status, retrieval time, and request fingerprint. An unavailable walking route is stored explicitly rather than converted to a straight-line estimate.
+
+#### `nearby_analysis_runs`
+
+Records each explicit selected-property nearby analysis, its Google service status, cache/refresh mode, counts, timestamps, and sanitized errors.
+
 ### 6.2 Idempotency
 
 Idempotency is enforced at multiple layers:
@@ -318,6 +363,7 @@ Idempotency is enforced at multiple layers:
 - Events use a deterministic event fingerprint.
 - Active scan and LLM jobs are protected by transactional uniqueness or a database lease.
 - LLM cache keys include profile, property data, provider, model, and prompt version.
+- Nearby results use property coordinates, category set, API mode, and retrieval policy in their cache identity.
 
 ## 7. Source Acquisition
 
@@ -351,6 +397,96 @@ Each adapter provides:
 
 Passwords, cookies, tokens, and API keys must not be written to diagnostic fixtures or logs.
 
+When `logging.retain_source_payloads` is enabled (the default), every received HTTP
+body is saved before status/block/layout handling under the private XDG data directory:
+
+```text
+source_payloads/<source>/<UTC-date>/<timestamp>_<status>_<content-hash>.body.gz
+```
+
+A sidecar JSON file stores the source, public request URL, status, retrieval time,
+content type, and SHA-256 digest. Headers and cookies are deliberately excluded. Files
+use mode `0600`, directories use `0700`, and no payload is stored in the repository.
+Network failures that produce no HTTP response have no payload to retain.
+
+### 7.1 Redfin access decision
+
+Redfin exposes public town search and listing-detail pages. A standard browser user
+agent currently returns server-rendered home cards and Schema.org JSON-LD without
+requiring browser automation. The filtered town URL applies property type, maximum
+price, and minimum bedroom/bathroom constraints; the adapter repeats those checks after normalization and
+removes nearby-town recommendations.
+
+The adapter is strictly user-triggered by `GO`, makes one request at a time, waits a
+random 3–8 seconds between requests, and performs at most two attempts for transient
+failures. It does not retry HTTP 403/429, CAPTCHA, robot pages, or explicit access
+blocks. Those conditions and unrecognized layouts are visible source failures rather
+than empty successful scans. Detail pages contribute explicit bedroom, bathroom,
+property type, year-built, description, price, coordinates, availability, and source
+update fields from JSON-LD. Missing tracked listings are refreshed and recorded as
+`unavailable` on HTTP 404.
+
+An HTTP 202 AWS WAF challenge is terminal for Redfin during the current scan. The
+triggering listing first persists useful search-card fallback data, then Redfin stops
+immediately so later requests are not wasted; other sources continue.
+
+Redfin's current Terms of Use restrict automated extraction. The local user is
+responsible for ensuring their use is authorized; the adapter can be disabled in local
+configuration. The application does not bypass CAPTCHA, authentication, or access
+controls.
+
+Research references checked for M6.1:
+
+- Redfin public town-search page: <https://www.redfin.com/city/36093/MA/Belmont>
+- Redfin Terms of Use: <https://www.redfin.com/about/terms-of-use>
+
+### 7.2 Zillow access decision
+
+Zillow town searches encode property type, maximum price, and minimum bedroom and
+bathroom constraints in the public page's `searchQueryState`. When the page is
+accessible, the adapter reads embedded application JSON and Schema.org JSON-LD,
+repeats all filters locally, and fetches listing details one at a time. It waits a
+random 5–10 seconds between requests and performs at most two attempts for transient
+network and server failures.
+
+As checked on 2026-08-05, an ordinary HTTP request from the development environment
+receives HTTP 403 with `x-px-blocked: 1` and a CAPTCHA page. The adapter detects this
+as `ZillowAccessBlocked`, stops immediately, and reports an independent source
+failure. It does not bypass CAPTCHA or reuse browser cookies. Redfin results already
+persisted by the same scan remain available.
+
+Zillow's current Terms of Use prohibit automated queries and scraping. The local user
+is responsible for obtaining permission before enabling the adapter. It can be
+disabled in local configuration.
+
+Research references checked for M7.1:
+
+- Zillow public Belmont search: <https://www.zillow.com/belmont-ma/>
+- Zillow Terms of Use: <https://www.zillow.com/corporate/terms-of-use/>
+
+### 7.3 Realtor access decision
+
+Realtor public search pages currently return server-rendered property cards to an
+ordinary HTTP client. Filtered URL path segments apply property type, maximum price,
+and minimum bedroom/bathroom constraints. The adapter extracts the listing link,
+price, beds, baths, area, type, and address from each card, then uses Schema.org
+JSON-LD on detail pages for coordinates, updated price, area, description, image, and
+availability. All configured constraints are checked again after normalization.
+
+Requests run sequentially with a random 3–8 second interval, a 20-second timeout,
+and at most two attempts for transient network or server errors. HTTP 403/429 and
+human-verification pages stop only the Realtor source. Existing Redfin and Zillow
+results remain available.
+
+Realtor's current Terms of Use restrict scraping and automated collection without
+written permission. The local user is responsible for permission and can disable the
+adapter in local configuration. The application does not bypass access controls.
+
+Research references checked for M8.1:
+
+- Realtor public Belmont search: <https://www.realtor.com/realestateandhomes-search/Belmont_MA/type-single-family-home>
+- Realtor Terms of Use: <https://www.realtor.com/terms-of-service/>
+
 ## 8. Normalization and Deduplication
 
 Normalization produces consistent:
@@ -364,34 +500,58 @@ Normalization produces consistent:
 
 Matching levels:
 
-1. **Exact:** normalized municipality, address, and unit match, or a matching parcel identifier.
+1. **Exact:** normalized municipality, address, and unit match, or a matching parcel identifier with compatible unit evidence.
 2. **High confidence:** nearly identical address and coordinates with compatible property facts.
 3. **Ambiguous:** keep separate and mark as a possible duplicate.
 
 Unit number is mandatory for auto-merging multi-unit properties. A false merge is worse than a visible duplicate.
 
-All source facts remain available. A display resolver chooses a current value using freshness, completeness, and an explicit source-priority rule while exposing conflicts and provenance to the UI.
+All source facts remain available. The display resolver always uses Redfin first, Zillow second, and other sources afterward, while exposing conflicts and provenance to the UI. This rule can evolve without rewriting source states.
 
 ## 9. Scan Job Design
 
 Pressing `GO` first saves the current form. The scan starts only if the save succeeds.
+`Force GO` follows the same save and single-job rules but bypasses same-day detail
+reuse. Newly retrieved values win within the same
+source; missing new fields are filled from that source's prior state before the new
+snapshot is fingerprinted and stored.
+
+Production scans use only implemented live adapters. Fixture adapters are dependency-injected by tests and never run in the default application.
 
 Flow:
 
 1. Validate profile and search configuration.
 2. Save and perform the daily backup if needed.
 3. Atomically claim the single active scan slot.
-4. If the previous completed scan is recent, require an explicit confirmation flag.
-5. Start independent source runs with limited concurrency.
-6. Normalize returned records.
-7. Match or create properties and listing episodes.
-8. Store/reuse listing states and add scan observations.
-9. Derive state and price events.
-10. Fetch and link sold comparables.
-11. Produce deterministic initial-selection results and financial ranges.
-12. Mark the job successful, partially successful, or failed.
+4. Start independent source runs with limited concurrency.
+5. Normalize each completed listing and commit it immediately.
+6. Match or create properties and listing episodes.
+7. Store/reuse listing states and add scan observations before fetching the next detail.
+8. Derive state and price events.
+9. Fetch and link sold comparables.
+10. Produce deterministic initial-selection results and financial ranges.
+11. Mark the job successful, partially successful, or failed.
 
 One failed source yields `partial_success` when other sources succeed.
+If a source fails after emitting at least one listing, the job is also `partial_success` and those listings remain visible. On a same-day retry, the adapter still refreshes town result pages for discovery and current list price, but reuses details only when year built, bedrooms, bathrooms, price, picture, lot size, living area, and status are all present. Missing, partial, and previously failed details resume normally. Progress reports successful, failed, in-progress, and skipped-complete-today counts separately.
+
+### 9.1 History and sold comparables
+
+Every ingested source transition derives append-only first-seen, price-change,
+status-change, delisted, relisted, and sold events. The fingerprint includes the source
+listing identity, transition values, and transition observation time. Re-observing an
+unchanged state therefore creates no event, while a later repeated transition remains
+representable. Startup backfills events from persisted scan observations.
+
+Redfin, Zillow, and Realtor parsers normalize source-provided sold-history records into
+the listing facts. Realtor also scans one bounded recently-sold results page per configured
+town; these records are stored as comparable inventory and excluded from Matching homes
+and later active-listing detail refreshes. Cross-source copies of the same property/date/price transaction are
+deduplicated by display priority: Redfin, then Zillow, then Realtor. Comparables are
+derived locally after each scan. Ranking uses explicit municipality, property type,
+living-area, bedroom, recency, and distance evidence. Same-town records are used by
+default; nearby towns are added and labeled only when fewer than three same-town
+records exist. This data is historical evidence and is never presented as a prediction.
 
 Job progress is persisted before being emitted over SSE. Reconnecting browsers can therefore reconstruct the current status. On server startup, abandoned `running` jobs become `interrupted`.
 
@@ -460,9 +620,12 @@ The backend validates every response. Invalid JSON may be retried once with a re
 
 The LLM does not invent public facts or recalculate financial numbers. Deterministic application data remains authoritative.
 
-### 11.4 Ranking and Cache
+### 11.4 Evaluation Cache
 
-The LLM evaluates individual properties. The application creates the final list order from must-have results and good-to-have scores so adding another property does not require re-ranking every unchanged property.
+The LLM evaluates individual properties without assigning a rank or changing the user-selected
+property order. Its property payload combines the UI's resolved facts and financial calculations
+with each source's latest saved listing description, normalized detail facts, source timestamp, and
+URL. Provider calls do not enable browsing; URLs are provenance rather than a fetch mechanism.
 
 Cache identity:
 
@@ -474,9 +637,67 @@ model
 prompt_version
 ```
 
-Forced reanalysis bypasses cache lookup but retains old evaluation history. Cloud analysis requires confirmation with the property count. Provider calls use bounded concurrency and handle rate limits without failing the entire run.
+Forced reanalysis bypasses cache lookup but retains old evaluation history. Pressing the analysis
+button is the explicit authorization for the configured provider call, so there is no second
+confirmation dialog. Provider calls use bounded concurrency and handle rate limits without failing
+the entire run.
 
-## 12. API Design
+### 11.5 Listing Digest
+
+After the global analysis action, one additional structured LLM call compares the current analyzed
+set using only saved per-property evaluations and deterministic application financials. The digest
+contains an overview, up to five top choices, explicit must-have disqualifiers, tradeoffs, a
+financial comparison, and shared unknowns. It is cached by its complete inputs and prompt version,
+saved in SQLite, and reloaded after restart. Per-card forced analysis does not automatically call the
+digest model; it instead makes an existing digest stale when its inputs materially change.
+
+## 12. Google Maps and Walkability
+
+### 12.1 Selected-property Map
+
+The property table already supports selection for LLM analysis. The same selection state powers a `Map selected` action. The React map view:
+
+- Loads Google Maps only after the user opens it.
+- Adds one marker per selected property.
+- Fits bounds to all selected markers.
+- Opens a local property summary when a marker is selected.
+- Can overlay cached nearby destinations for the active property.
+
+No map request occurs during initial page load, profile save, `GO`, or LLM analysis.
+
+### 12.2 Nearby Discovery and Walking Routes
+
+For each explicitly selected property:
+
+1. Use its known coordinates; geocode only when coordinates are missing and that service is configured.
+2. Use Google Places Nearby Search for configured categories such as parks, groceries, shops, cafes, restaurants, and pharmacies.
+3. Deduplicate candidates by Google Place ID.
+4. Limit candidates per category before routing to control cost.
+5. Use the Google Routes API in walking mode to compute actual walking distance and duration from the property to each candidate.
+6. Store policy-permitted fields, derived walk results, retrieval time, and unavailable-route status.
+7. Display actual minutes and distance in configurable walk-duration buckets.
+
+Straight-line distance may be used to preselect routing candidates but is never presented as walking distance.
+
+### 12.3 Cost, Cache, and Failure
+
+- A confirmation shows selected-property count and estimated request scope before uncached calls.
+- Fresh cache is reused unless the user selects refresh.
+- Places and Routes calls use field masks, bounded concurrency, quotas, timeouts, and partial-failure handling.
+- Failure for one property or category does not discard other results.
+- Google billing, quota, credential, or policy errors remain visible and sanitized.
+- Storage and refresh behavior follows current Google Maps Platform terms rather than assuming Google content can be retained forever.
+
+### 12.4 Credentials and Privacy
+
+Use separate keys:
+
+- A browser key restricted to the Maps JavaScript API and approved local referrers.
+- A backend key restricted to required Places, Routes, and optional Geocoding APIs.
+
+Neither key is committed or logged. The backend key is never returned by an API. The UI warns that opening the map or running nearby analysis sends selected coordinates and request metadata to Google.
+
+## 13. API Design
 
 Initial API surface:
 
@@ -490,7 +711,7 @@ GET    /api/profile
 PUT    /api/profile
 
 POST   /api/scans
-GET    /api/scans/latest
+GET    /api/scans/status
 GET    /api/scans/{scan_id}
 GET    /api/scans/{scan_id}/events
 
@@ -499,17 +720,28 @@ GET    /api/properties/{property_id}
 GET    /api/properties/{property_id}/history
 GET    /api/properties/{property_id}/comparables
 
+POST   /api/maps/nearby-analyses
+GET    /api/maps/nearby-analyses/{analysis_id}
+GET    /api/maps/nearby-analyses/{analysis_id}/events
+GET    /api/maps/properties/{property_id}/nearby
+GET    /api/maps/browser-config
+
 POST   /api/analyses
 GET    /api/analyses/latest
 GET    /api/analyses/{analysis_id}
 GET    /api/analyses/{analysis_id}/events
 
+PUT    /api/properties/{property_id}/manual-tags
+PATCH  /api/properties/{property_id}/manual-facts
+
 GET    /api/exports/properties.csv
 ```
 
-`POST /api/scans` accepts an explicit recent-scan confirmation flag. `POST /api/analyses` accepts property IDs, provider, force flag, and cloud confirmation. API responses never include provider secrets.
+`POST /api/scans` starts an incremental scan immediately, or accepts a force flag to bypass same-day detail reuse. `POST /api/analyses` accepts property IDs, provider, force, and whether the global action should generate a digest. Calling it is the explicit analysis action. `GET /api/analyses/latest` returns current per-property evaluations and the latest saved digest. API responses never include provider secrets.
 
-## 13. Frontend Design
+`GET /api/maps/browser-config` may return the separately restricted browser Maps JavaScript key because Google Maps JavaScript executes in the browser. It must never return the backend Places/Routes key. `POST /api/maps/nearby-analyses` accepts selected property IDs, requested place categories, refresh mode, and explicit Google-call confirmation.
+
+## 14. Frontend Design
 
 The top control bar contains:
 
@@ -523,11 +755,17 @@ Main interface areas:
 
 - Profile, municipality, and finance editor.
 - Sortable, filterable, selectable property results.
+- An editable checkbox tag dropdown on each property plus separate top-level require-all and
+  hide-any tag dropdowns; no automated Google or LLM classification of those tags.
+- A crawl-only retrieval-status pill and a manual missing-field editor. Resolution order is crawled
+  source data first, manual fallback second, and unknown last.
 - Property detail with source conflicts and provenance.
 - Financial breakdown.
 - Must-have and good-to-have evaluation.
+- Saved cross-listing digest with top choices and tradeoffs.
 - Sold comparables.
 - Price and status history.
+- A selected-property Google Map and per-property nearby walking results.
 
 Frontend state distinguishes:
 
@@ -538,20 +776,25 @@ Frontend state distinguishes:
 
 The browser subscribes to SSE while a job is active and falls back to polling after a connection error. Refreshing the page reloads authoritative state from the API.
 
-## 14. Security and Privacy
+## 15. Security and Privacy
 
-- Bind only to `127.0.0.1`.
+- Bind to `localhost` on port `7004` by default and never widen the host binding implicitly.
 - Use same-origin API access; do not enable broad CORS.
 - Escape all source and LLM text before rendering.
 - Never log profile contents by default.
-- Never log or return API keys, authorization headers, cookies, or source tokens.
+- Never log API keys, authorization headers, cookies, or source tokens, and never return backend or LLM keys through an API.
 - Mark cloud providers clearly before transmitting private profile data.
+- Treat Google Maps as another explicit cloud disclosure: selected coordinates and map activity leave the machine.
+- Keep the backend Google Maps key server-side; expose only the separately restricted browser key required by the Maps JavaScript API.
 - Use restrictive permissions for newly created config, profile, backup, database, and log files where practical.
-- Keep source HTML and diagnostic payload retention opt-in or sanitized.
+- Keep source HTML and diagnostic payloads outside the repository with restrictive permissions; never retain response headers or cookies.
+- Never commit personal information, private profile content, personal or network IP addresses, credentials, cookies, tokens, source payloads, or machine-specific absolute paths. Tracked examples use placeholders and `localhost` only.
+- Keep runtime configuration, profiles, backups, databases, logs, browser state, HAR files, and traces outside the repository or covered by `.gitignore`.
+- Run a privacy and secret scan over staged content before every commit.
 
 No authentication is required because the server is localhost-only. Authentication becomes a separate requirement if the user later exposes it to a network.
 
-## 15. Testing Strategy
+## 16. Testing Strategy
 
 ### Unit Tests
 
@@ -562,6 +805,7 @@ No authentication is required because the server is localhost-only. Authenticati
 - Deduplication confidence and false-merge prevention.
 - Listing state hashes and event derivation.
 - LLM cache identity and response validation.
+- Nearby category filtering, Place ID deduplication, walk-duration buckets, and cache identity.
 
 ### Adapter Contract Tests
 
@@ -581,13 +825,14 @@ Normal tests must not depend on live third-party websites.
 - Repeated scan idempotency.
 - Server restart and interrupted-job recovery.
 - Fake local LLM provider, cache reuse, and forced reanalysis.
+- Fake Places and Routes providers, selected-property map configuration, partial failures, and forced refresh.
 - React production build served by FastAPI.
 
-## 16. Operational Behavior
+## 17. Operational Behavior
 
 - `GO` and LLM analysis are user-triggered; there are no automatic external calls.
+- Google map loading and nearby walking analysis are also user-triggered; there are no automatic Google Maps calls.
 - Logs use structured messages with secret redaction.
 - Database and profile backup procedures are documented separately before release.
 - Source parser failures remain visible and actionable rather than silently producing empty results.
 - Database migrations are forward-only during normal operation; restoration uses a database backup.
-

@@ -1,0 +1,80 @@
+# Copy this file to the application's private configuration directory and
+# replace angle-bracket placeholders locally. Never commit the private copy.
+
+server:
+  host: localhost
+  port: 7004
+
+profile_file: "<private-profile-directory>/house_profile.yaml"
+
+search:
+  state: MA
+  municipalities:
+    - "<town-one>"
+    - "<town-two>"
+  included_property_types:
+    - single_family
+  minimum_bedrooms: 0
+  minimum_bathrooms: 0
+  maximum_price: 2000000
+
+finance:
+  mortgage_years: 30
+  default_down_payment_percent: 20
+  annual_interest_rate:
+    low: 0.060
+    high: 0.075
+  annual_insurance_rate:
+    low: 0.002
+    high: 0.005
+  annual_maintenance_rate:
+    low: 0.005
+    high: 0.015
+  closing_cost_rate:
+    low: 0.020
+    high: 0.050
+
+sources:
+  redfin:
+    enabled: true
+  zillow:
+    enabled: true
+  realtor:
+    enabled: true
+
+llm:
+  default_provider: google
+  timeout_seconds: 180
+  max_concurrency: 2
+  providers:
+    google:
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      model: "<google-model>"
+    ollama:
+      base_url: http://localhost:11434/v1
+      api_key_env: OLLAMA_API_KEY
+      model: "<ollama-model>"
+    openai:
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      model: "<openai-model>"
+    deepseek:
+      base_url: https://api.deepseek.com/v1
+      api_key_env: DEEPSEEK_API_KEY
+      model: "<deepseek-model>"
+
+maps:
+  enabled: false
+  # One prototype key can serve both roles. For production, unset this and
+  # use separately restricted browser/backend keys below.
+  demo_api_key_env: GOOGLE_MAPS_API_KEY
+  browser_api_key_env: GOOGLE_MAPS_BROWSER_API_KEY
+  backend_api_key_env: GOOGLE_MAPS_BACKEND_API_KEY
+  nearby_search_radius_meters: 2500
+  cache_days: 14
+
+logging:
+  level: INFO
+  include_profile_content: false
+  retain_source_payloads: true
