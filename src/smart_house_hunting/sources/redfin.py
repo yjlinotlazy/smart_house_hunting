@@ -453,6 +453,7 @@ def parse_detail_page(html: str, fallback: NormalizedListing) -> NormalizedListi
             for item in residence.get("amenityFeature", [])
             if isinstance(item, dict) and item.get("value") is True and item.get("name")
         ],
+        "raw_crawled_data": listing,
     }
     availability = str(offer.get("availability", ""))
     if availability.endswith("InStock"):

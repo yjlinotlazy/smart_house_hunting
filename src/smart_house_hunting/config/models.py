@@ -105,6 +105,8 @@ class LLMConfig(StrictModel):
     default_provider: str = "google"
     timeout_seconds: int = Field(default=180, ge=1)
     max_concurrency: int = Field(default=2, ge=1, le=20)
+    analysis_template: str = ""
+    output_schema: str = ""
     providers: dict[str, LLMProviderConfig]
 
     @field_validator("providers")
@@ -132,6 +134,15 @@ class MapsConfig(StrictModel):
     cache_days: int = Field(default=14, ge=1, le=90)
 
 
+class UiFilters(StrictModel):
+    municipality: str = ""
+    max_price: str = ""
+    min_bedrooms: str = ""
+    min_bathrooms: str = ""
+    built_after: str = ""
+    sort: Literal["price_asc", "price_desc", "town"] = "price_asc"
+
+
 class ApplicationConfig(StrictModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     profile_file: Path
@@ -141,6 +152,7 @@ class ApplicationConfig(StrictModel):
     llm: LLMConfig
     maps: MapsConfig = Field(default_factory=MapsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    ui_filters: UiFilters = Field(default_factory=UiFilters)
 
 
 class PublicServerConfig(StrictModel):
@@ -157,6 +169,7 @@ class PublicApplicationConfig(StrictModel):
     server: PublicServerConfig
     search: SearchConfig
     llm: PublicLLMConfig
+    ui_filters: UiFilters = Field(default_factory=UiFilters)
 
 
 class ConfigUpdate(StrictModel):
@@ -175,4 +188,5 @@ def to_public_config(config: ApplicationConfig) -> PublicApplicationConfig:
             default_provider=config.llm.default_provider,
             providers=sorted(config.llm.providers),
         ),
+        ui_filters=config.ui_filters,
     )

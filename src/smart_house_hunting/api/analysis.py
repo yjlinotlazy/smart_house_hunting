@@ -86,6 +86,44 @@ Output rules:
   the evaluation.
 - Do not add, omit, or rename criteria. Return only JSON matching the supplied output schema.
 """.strip()
+BUILT_IN_ANALYSIS_TEMPLATE = (
+    EVALUATION_SYSTEM_PROMPT
+    + "\n\nHousehold profile:\n{household_profile}\n\n"
+    + "Structured criteria:\n{criteria}\n\nProperty data:\n{property_data}\n\n"
+    + "Output schema:\n{output_schema}"
+)
+
+
+def _render_analysis_template(
+    template: str,
+    *,
+    profile: Any,
+    criteria: Any,
+    property_data: Any,
+    output_schema: Any,
+) -> str:
+    values = {
+        "household_profile": json.dumps(profile.model_dump(), default=str),
+        "criteria": json.dumps(criteria.model_dump(), default=str),
+        "property_data": json.dumps(property_data, default=str),
+        "output_schema": json.dumps(output_schema, default=str),
+    }
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
+
+
+def _configured_output_schema(config) -> dict[str, Any]:
+    if config.llm.output_schema.strip():
+        try:
+            value = json.loads(config.llm.output_schema)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+    return EvaluationResult.model_json_schema()
+
 
 DIGEST_SYSTEM_PROMPT = f"""
 You produce a concise comparison digest for a set of homes that were already evaluated against
@@ -379,10 +417,16 @@ async def run_analysis(body: AnalysisRequest, request: Request) -> dict:
                 result = await _validated(
                     provider,
                     EvaluationResult,
-                    EVALUATION_SYSTEM_PROMPT,
+                    _render_analysis_template(
+                        config.llm.analysis_template.strip() or BUILT_IN_ANALYSIS_TEMPLATE,
+                        profile=profile,
+                        criteria=criteria,
+                        property_data=property_data,
+                        output_schema=_configured_output_schema(config),
+                    ),
                     json.dumps(
                         {
-                            "output_schema": EvaluationResult.model_json_schema(),
+                            "output_schema": _configured_output_schema(config),
                             "criteria": criteria.model_dump(),
                             "property": property_data,
                         },
@@ -593,6 +637,7 @@ async def latest_analysis(request: Request) -> dict:
                     "freshness": freshness,
                     "provider": row.provider,
                     "model": row.model,
+                    "prompt": config.llm.analysis_template.strip() or BUILT_IN_ANALYSIS_TEMPLATE,
                     "result": (
                         {
                             key: value

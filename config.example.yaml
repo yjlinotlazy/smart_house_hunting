@@ -44,6 +44,7 @@ sources:
 
 llm:
   default_provider: google
+  analysis_template: ""
   timeout_seconds: 180
   max_concurrency: 2
   providers:

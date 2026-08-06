@@ -32,6 +32,7 @@ import {
   loadScanStatus,
   saveConfig,
   saveProfile,
+  saveUiFilters,
   startScan,
   loadMapConfig,
   loadNearby,
@@ -218,6 +219,7 @@ function HomePage() {
     built_after: "",
     sort: "price_asc" as "price_asc" | "price_desc" | "town",
   });
+  const [filtersLoaded, setFiltersLoaded] = useState(false);
 
   const saveManualTags = async (
     propertyId: number,
@@ -327,9 +329,11 @@ function HomePage() {
         );
         setPropertyFilters((current) => ({
           ...current,
+          ...config.ui_filters,
           min_bedrooms: config.search.minimum_bedrooms,
           max_price: config.search.maximum_price,
         }));
+        setFiltersLoaded(true);
         setPage({ status: "ready", initial: loaded });
         setScanStatus(scans);
       })
@@ -511,7 +515,7 @@ function HomePage() {
   }, [form.profile.finance, page.status, propertyInputs]);
 
   useEffect(() => {
-    if (page.status !== "ready") return;
+    if (page.status !== "ready" || !filtersLoaded) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
       setPropertyState("loading");
@@ -542,6 +546,11 @@ function HomePage() {
     scanStatus.latest_attempt?.id,
     scanStatus.latest_attempt?.status,
   ]);
+
+  useEffect(() => {
+    if (page.status !== "ready") return;
+    void saveUiFilters(propertyFilters).catch(() => undefined);
+  }, [filtersLoaded, page.status, propertyFilters]);
 
   function updateProfile<K extends keyof HouseholdProfile>(
     key: K,
@@ -860,51 +869,6 @@ function HomePage() {
               placeholder="Town one, Town two"
             />
           </label>
-        </section>
-
-        <section className="form-section form-section-wide">
-          <div className="section-heading">
-            <span>02</span>
-            <div>
-              <h2>Household profile</h2>
-              <p>
-                Freeform context used only when you explicitly request LLM
-                analysis.
-              </p>
-            </div>
-          </div>
-          <div className="text-grid">
-            <label>
-              Household and family situation
-              <textarea
-                value={form.profile.family}
-                onChange={(event) =>
-                  updateProfile("family", event.target.value)
-                }
-                rows={7}
-              />
-            </label>
-            <label>
-              Must have
-              <textarea
-                value={form.profile.must_have}
-                onChange={(event) =>
-                  updateProfile("must_have", event.target.value)
-                }
-                rows={7}
-              />
-            </label>
-            <label>
-              Good to have
-              <textarea
-                value={form.profile.good_to_have}
-                onChange={(event) =>
-                  updateProfile("good_to_have", event.target.value)
-                }
-                rows={7}
-              />
-            </label>
-          </div>
         </section>
 
         <section className="form-section form-section-wide">
@@ -1479,8 +1443,8 @@ function ListingDigestPanel({ digest }: { digest: ListingDigest }) {
           <h3>Listing digest</h3>
         </div>
         <small>
-          {digest.property_ids.length} properties · {digest.provider} ·{" "}
-          {digest.freshness} · {new Date(digest.generated_at).toLocaleString()}
+          {digest.property_ids.length} properties · {digest.provider} · Last
+          request {new Date(digest.generated_at).toLocaleString()}
         </small>
       </div>
       {result ? (
@@ -1621,6 +1585,7 @@ function PropertyCard({
   const [newManualTagCategory, setNewManualTagCategory] =
     useState<ManualPropertyTagCategory>(DEFAULT_TAG_CATEGORY);
   const [manualFactsOpen, setManualFactsOpen] = useState(false);
+  const [analysisTab, setAnalysisTab] = useState<"result" | "prompt">("result");
   const [manualFactValues, setManualFactValues] = useState<
     Partial<Record<ManualFactField, string>>
   >({});
@@ -1782,10 +1747,30 @@ function PropertyCard({
           <h3>
             {address}（
             {property.price.display_value
-              ? wholeCurrency(property.price.display_value)
+              ? wholeCurrency(property.price.display_value).replace(/^\$/, "")
               : "-"}
             ）
           </h3>
+          <div className="listing-links">
+            {property.sources.map((source) => (
+              <a
+                key={source.source}
+                className="listing-link"
+                href={source.url}
+                aria-label={`${sourceFullLabel(source.source)} ↗`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span className="source-name-full">
+                  {sourceFullLabel(source.source)}
+                </span>
+                <span className="source-name-short">
+                  {sourceShortLabel(source.source)}
+                </span>{" "}
+                ↗
+              </a>
+            ))}
+          </div>
         </div>
         <div className="property-card-actions">
           <strong className="property-price">
@@ -1793,19 +1778,6 @@ function PropertyCard({
               ? wholeCurrency(property.price.display_value)
               : "-"}
           </strong>
-          <div className="listing-links">
-            {property.sources.map((source) => (
-              <a
-                key={source.source}
-                className="listing-link"
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {sourceLabel(source.source)} ↗
-              </a>
-            ))}
-          </div>
         </div>
       </div>
       <div className="property-facts">
@@ -2053,33 +2025,45 @@ function PropertyCard({
       {historyOpen && <PropertyHistoryPanel state={historyState} />}
       {analysis?.result && (
         <div className="property-analysis">
-          <strong>
-            LLM analysis · {analysis.provider} · {analysis.freshness}
-          </strong>
-          <p>{analysis.result.summary}</p>
-          {analysis.result.must_have.map((item) => (
-            <small key={item.id}>
-              <b>{item.result.replaceAll("_", " ")}</b> · {item.evidence}
-            </small>
-          ))}
-          {analysis.result.good_to_have.map((item) => (
-            <small key={item.id}>
-              <b>{item.score}/100</b> · {item.evidence}
-            </small>
-          ))}
-          {analysis.result.missing_information.length > 0 && (
-            <small>
-              Missing: {analysis.result.missing_information.join(", ")}
-            </small>
-          )}
-          <small>
-            Analyzed {new Date(analysis.analyzed_at).toLocaleString()}
-          </small>
-          {analysis.last_attempt_status === "failed" && (
-            <small className="property-warning">
-              Last reanalysis failed:{" "}
-              {analysis.last_attempt_error ?? "provider error"}
-            </small>
+          <div className="analysis-tabs">
+            <button type="button" onClick={() => setAnalysisTab("result")}>
+              Result
+            </button>
+            <button type="button" onClick={() => setAnalysisTab("prompt")}>
+              Prompt
+            </button>
+          </div>
+          {analysisTab === "prompt" ? (
+            <pre className="analysis-prompt">{analysis.prompt}</pre>
+          ) : (
+            <>
+              <strong>
+                LLM analysis · {analysis.provider} · Last request{" "}
+                {new Date(analysis.analyzed_at).toLocaleString()}
+              </strong>
+              <p>{analysis.result.summary}</p>
+              {analysis.result.must_have.map((item) => (
+                <small key={item.id}>
+                  <b>{item.result.replaceAll("_", " ")}</b> · {item.evidence}
+                </small>
+              ))}
+              {analysis.result.good_to_have.map((item) => (
+                <small key={item.id}>
+                  <b>{item.score}/100</b> · {item.evidence}
+                </small>
+              ))}
+              {analysis.result.missing_information.length > 0 && (
+                <small>
+                  Missing: {analysis.result.missing_information.join(", ")}
+                </small>
+              )}
+              {analysis.last_attempt_status === "failed" && (
+                <small className="property-warning">
+                  Last reanalysis failed:{" "}
+                  {analysis.last_attempt_error ?? "provider error"}
+                </small>
+              )}
+            </>
           )}
         </div>
       )}
@@ -2485,6 +2469,22 @@ function sourceLabel(source: string): string {
     .split(/[-_]/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function sourceShortLabel(source: string): string {
+  const canonical = source.toLocaleLowerCase().replace(/^fixture-/, "");
+  if (canonical === "redfin") return "RF";
+  if (canonical === "zillow") return "Z";
+  if (canonical === "realtor") return "R";
+  return sourceLabel(source);
+}
+
+function sourceFullLabel(source: string): string {
+  const canonical = source.toLocaleLowerCase().replace(/^fixture-/, "");
+  if (canonical === "redfin") return "Redfin";
+  if (canonical === "zillow") return "Zillow";
+  if (canonical === "realtor") return "Realtor";
+  return sourceLabel(source);
 }
 
 function moneyRange(range: { low: string; high: string }): string {

@@ -324,8 +324,7 @@ test("loads local settings and saves edited profile content", async () => {
 
   render(<App />);
 
-  const family = await screen.findByLabelText("Household and family situation");
-  expect(family).toHaveValue("Existing household context");
+  await screen.findByLabelText("Cities / towns");
   expect(screen.getByLabelText("Cities / towns")).toHaveValue(
     "Belmont, Newton",
   );
@@ -342,14 +341,14 @@ test("loads local settings and saves edited profile content", async () => {
   expect(mapSelected.parentElement).toHaveClass("results-actions");
   expect(
     await screen.findByRole("heading", {
-      name: "1 Fixture Ln（$800,000）",
+      name: "1 Fixture Ln（800,000）",
     }),
   ).toBeInTheDocument();
   expect(
     screen.getByAltText("Lead listing image for 1 Fixture Ln"),
   ).toHaveAttribute("src", "https://images.example.invalid/lead.jpg");
-  const redfinLink = screen.getByRole("link", { name: "Fixture Redfin ↗" });
-  const zillowLink = screen.getByRole("link", { name: "Fixture Zillow ↗" });
+  const redfinLink = screen.getByRole("link", { name: "Redfin ↗" });
+  const zillowLink = screen.getByRole("link", { name: "Zillow ↗" });
   expect(redfinLink).toHaveAttribute("href", "https://example.invalid/redfin");
   expect(zillowLink).toHaveAttribute("href", "https://example.invalid/zillow");
   expect(redfinLink.parentElement).toBe(zillowLink.parentElement);
@@ -409,14 +408,14 @@ test("loads local settings and saves edited profile content", async () => {
     screen.getByRole("checkbox", { name: "Must have tags: Corner lot" }),
   );
   expect(
-    screen.getByRole("heading", { name: "1 Fixture Ln（$800,000）" }),
+    screen.getByRole("heading", { name: "1 Fixture Ln（800,000）" }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByText("Hide tags"));
   fireEvent.click(
     screen.getByRole("checkbox", { name: "Hide tags: Corner lot" }),
   );
   expect(
-    screen.queryByRole("heading", { name: "1 Fixture Ln（$800,000）" }),
+    screen.queryByRole("heading", { name: "1 Fixture Ln（800,000）" }),
   ).not.toBeInTheDocument();
   fireEvent.click(
     screen.getByRole("checkbox", { name: "Hide tags: Corner lot" }),
@@ -484,20 +483,6 @@ test("loads local settings and saves edited profile content", async () => {
     screen.getByText(/Excludes unknown: property_tax, hoa/),
   ).toBeInTheDocument();
 
-  fireEvent.change(family, { target: { value: "Updated household context" } });
-  const save = screen.getByRole("button", { name: "Save" });
-  expect(save).toBeEnabled();
-  fireEvent.click(save);
-
-  await waitFor(() =>
-    expect(screen.getByText("Saved locally.")).toBeInTheDocument(),
-  );
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/api/profile",
-    expect.objectContaining({ method: "PUT" }),
-  );
-
-  fireEvent.change(family, { target: { value: "Saved automatically by GO" } });
   fireEvent.click(screen.getByRole("button", { name: "GO" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -505,9 +490,4 @@ test("loads local settings and saves edited profile content", async () => {
       expect.objectContaining({ method: "POST" }),
     ),
   );
-  const profileSaves = fetchMock.mock.calls.filter(
-    ([url, init]) =>
-      String(url).endsWith("/api/profile") && init?.method === "PUT",
-  );
-  expect(profileSaves).toHaveLength(2);
 });

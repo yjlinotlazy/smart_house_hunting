@@ -428,6 +428,7 @@ def parse_detail_page(html: str, fallback: NormalizedListing) -> NormalizedListi
                 "property_type": property_type,
                 "year_built": _integer(residence.get("yearBuilt")),
                 "image_urls": images,
+                "raw_crawled_data": {"listing": listing, "residence": residence},
             },
             "source_updated_at": _datetime(listing.get("dateModified")),
         }

@@ -1,12 +1,41 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
+  HouseholdProfile,
   PrivateConfig,
+  loadProfile,
   loadSettings,
   loadSettingsYaml,
   saveSettings,
+  saveProfile,
   saveSettingsYaml,
 } from "./api/client";
+
+const BUILT_IN_LLM_TEMPLATE = `You evaluate one home against the household profile and structured criteria.
+
+Household profile:
+{household_profile}
+
+Structured criteria:
+{criteria}
+
+Property data:
+{property_data}
+
+Output schema:
+{output_schema}`;
+
+const EMPTY_PROFILE: HouseholdProfile = {
+  family: "",
+  must_have: "",
+  good_to_have: "",
+  finance: {
+    current_annual_gross_income: "0",
+    minimum_future_annual_gross_income: "0",
+    annual_travel_spending: "0",
+    down_payment: { mode: "percent", value: "20" },
+  },
+};
 
 const PROPERTY_TYPES = [
   ["single_family", "Single family"],
@@ -48,6 +77,7 @@ export function ConfigPage() {
   const [page, setPage] = useState<PageState>({ status: "loading" });
   const [mode, setMode] = useState<"form" | "yaml">("form");
   const [config, setConfig] = useState<PrivateConfig | null>(null);
+  const [profile, setProfile] = useState<HouseholdProfile | null>(null);
   const [yamlContent, setYamlContent] = useState("");
   const [municipalitiesText, setMunicipalitiesText] = useState("");
   const [saveState, setSaveState] = useState<
@@ -57,15 +87,19 @@ export function ConfigPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([loadSettings(), loadSettingsYaml()])
-      .then(([loadedConfig, loadedYaml]) => {
+    Promise.all([loadSettings(), loadSettingsYaml(), loadProfile()])
+      .then(([loadedConfig, loadedYaml, loadedProfile]) => {
         if (!active) return;
         setConfig(loadedConfig);
+        setProfile(loadedProfile.profile ?? EMPTY_PROFILE);
         setYamlContent(loadedYaml.content);
         setMunicipalitiesText(loadedConfig.search.municipalities.join(", "));
         setPage({
           status: "ready",
-          initialConfig: JSON.stringify(loadedConfig),
+          initialConfig: JSON.stringify({
+            config: loadedConfig,
+            profile: loadedProfile.profile ?? EMPTY_PROFILE,
+          }),
           initialYaml: loadedYaml.content,
         });
       })
@@ -83,9 +117,9 @@ export function ConfigPage() {
   }, []);
 
   const dirty = useMemo(() => {
-    if (page.status !== "ready" || !config) return false;
+    if (page.status !== "ready" || !config || !profile) return false;
     return mode === "form"
-      ? JSON.stringify(config) !== page.initialConfig
+      ? JSON.stringify({ config, profile }) !== page.initialConfig
       : yamlContent !== page.initialYaml;
   }, [config, mode, page, yamlContent]);
 
@@ -106,19 +140,22 @@ export function ConfigPage() {
 
   async function handleSave(event: FormEvent) {
     event.preventDefault();
-    if (!config) return;
+    if (!config || !profile) return;
     setSaveState("saving");
     setMessage("");
     try {
       if (mode === "form") {
-        const saved = await saveSettings(config);
+        const [saved] = await Promise.all([
+          saveSettings(config),
+          saveProfile(profile),
+        ]);
         const raw = await loadSettingsYaml();
         setConfig(saved);
         setYamlContent(raw.content);
         setMunicipalitiesText(saved.search.municipalities.join(", "));
         setPage({
           status: "ready",
-          initialConfig: JSON.stringify(saved),
+          initialConfig: JSON.stringify({ config: saved, profile }),
           initialYaml: raw.content,
         });
       } else {
@@ -213,6 +250,8 @@ export function ConfigPage() {
         ) : (
           <ConfigForm
             config={config}
+            profile={profile}
+            onProfileChange={setProfile}
             municipalitiesText={municipalitiesText}
             onMunicipalitiesChange={(value) => {
               setMunicipalitiesText(value);
@@ -268,11 +307,15 @@ function YamlEditor({
 
 function ConfigForm({
   config,
+  profile,
+  onProfileChange,
   municipalitiesText,
   onMunicipalitiesChange,
   onChange,
 }: {
   config: PrivateConfig;
+  profile: HouseholdProfile | null;
+  onProfileChange: (profile: HouseholdProfile) => void;
   municipalitiesText: string;
   onMunicipalitiesChange: (value: string) => void;
   onChange: (config: PrivateConfig) => void;
@@ -458,6 +501,70 @@ function ConfigForm({
       <section className="form-section">
         <SectionHeading
           label="04"
+          title="Household profile"
+          description="This context is included in LLM analysis prompts."
+        />
+        <div className="text-grid">
+          {(["family", "must_have", "good_to_have"] as const).map((field) => (
+            <label key={field}>
+              {field === "family"
+                ? "Household and family situation"
+                : field === "must_have"
+                  ? "Must have"
+                  : "Good to have"}
+              <textarea
+                rows={7}
+                value={profile?.[field] ?? ""}
+                onChange={(event) =>
+                  profile &&
+                  onProfileChange({ ...profile, [field]: event.target.value })
+                }
+              />
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="form-section">
+        <SectionHeading
+          label="05"
+          title="LLM analysis template"
+          description="Edit the prompt template. Braced fields are replaced with live data."
+        />
+        <label>
+          Template
+          <textarea
+            className="config-editor"
+            value={config.llm.analysis_template || BUILT_IN_LLM_TEMPLATE}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                llm: { ...config.llm, analysis_template: event.target.value },
+              })
+            }
+            spellCheck={false}
+          />
+        </label>
+        <label>
+          Output schema (JSON)
+          <textarea
+            className="config-editor"
+            value={config.llm.output_schema || ""}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                llm: { ...config.llm, output_schema: event.target.value },
+              })
+            }
+            placeholder="Leave blank to use the built-in EvaluationResult schema."
+            spellCheck={false}
+          />
+        </label>
+      </section>
+
+      <section className="form-section">
+        <SectionHeading
+          label="06"
           title="LLM providers"
           description="Only environment-variable names belong here, never actual API keys."
         />

@@ -9,7 +9,7 @@ from smart_house_hunting.config.loader import (
     replace_config_text,
     save_config_document,
 )
-from smart_house_hunting.config.models import ApplicationConfig, ConfigText
+from smart_house_hunting.config.models import ApplicationConfig, ConfigText, UiFilters
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -30,6 +30,17 @@ async def get_settings(request: Request) -> ApplicationConfig:
 async def update_settings(update: ApplicationConfig, request: Request) -> ApplicationConfig:
     try:
         return save_config_document(_config_path(request), update)
+    except ConfigError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.put("/ui-filters")
+async def update_ui_filters(update: UiFilters, request: Request) -> UiFilters:
+    try:
+        config = load_config_document(_config_path(request))
+        config.ui_filters = update
+        save_config_document(_config_path(request), config)
+        return update
     except ConfigError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

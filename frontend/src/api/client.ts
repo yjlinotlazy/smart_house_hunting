@@ -9,6 +9,7 @@ export type PublicConfig = {
     maximum_price: string;
   };
   llm: { default_provider: string; providers: string[] };
+  ui_filters: PropertyFilters;
 };
 
 export type DownPaymentMode = "amount" | "percent";
@@ -249,6 +250,8 @@ export type PrivateConfig = {
     default_provider: string;
     timeout_seconds: number;
     max_concurrency: number;
+    analysis_template: string;
+    output_schema: string;
     providers: Record<
       string,
       { base_url: string; api_key_env: string; model: string }
@@ -293,6 +296,7 @@ export type AnalysisResult = {
   freshness: "fresh" | "stale";
   provider: string;
   model: string;
+  prompt: string;
   result: {
     must_have: { id: string; result: string; evidence: string }[];
     good_to_have: { id: string; score: number; evidence: string }[];
@@ -367,6 +371,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function loadConfig(): Promise<PublicConfig> {
   return request<PublicConfig>("/api/config");
+}
+
+export function saveUiFilters(
+  filters: PropertyFilters,
+): Promise<PropertyFilters> {
+  return request<PropertyFilters>("/api/settings/ui-filters", {
+    method: "PUT",
+    body: JSON.stringify(filters),
+  });
 }
 
 export function saveConfig(municipalities: string[]): Promise<PublicConfig> {

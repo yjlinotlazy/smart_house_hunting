@@ -482,6 +482,7 @@ def parse_detail_page(html: str, fallback: NormalizedListing) -> NormalizedListi
                 "property_type": fallback.facts.get("property_type", "other"),
                 "year_built": year_built or fallback.facts.get("year_built"),
                 "image_urls": image_urls,
+                "raw_crawled_data": property_record,
                 "sold_history": sold_history or fallback.facts.get("sold_history", []),
             },
         }
