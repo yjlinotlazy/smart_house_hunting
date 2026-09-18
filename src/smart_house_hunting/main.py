@@ -33,6 +33,7 @@ from smart_house_hunting.jobs.manager import ScanManager
 from smart_house_hunting.logging_security import install_redaction
 from smart_house_hunting.services.history import backfill_property_events
 from smart_house_hunting.sources.base import SourceAdapter
+from smart_house_hunting.server_logging import TelemetryMiddleware
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
@@ -105,6 +106,7 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(title="Smart House Hunting", version=__version__, lifespan=lifespan)
+    app.add_middleware(TelemetryMiddleware)
     app.state.config_path = config_path or default_config_path()
     app.state.maps_client_factory = maps_client_factory
     app.state.llm_provider_factory = llm_provider_factory

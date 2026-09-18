@@ -64,8 +64,9 @@ const TAG_CATEGORY_LABELS: Record<ManualPropertyTagCategory, string> = {
 const MANUAL_FACT_OPTIONS: {
   key: ManualFactField;
   label: string;
-  type: "number" | "text" | "url";
+  type: "number" | "text" | "url" | "select";
   step?: string;
+  options?: string[];
 }[] = [
   { key: "price", label: "Price", type: "number", step: "1" },
   { key: "bedrooms", label: "Bedrooms", type: "number", step: "0.5" },
@@ -82,7 +83,12 @@ const MANUAL_FACT_OPTIONS: {
     type: "number",
     step: "1",
   },
-  { key: "status", label: "Status", type: "text" },
+  {
+    key: "status",
+    label: "Status",
+    type: "select",
+    options: ["active", "pending", "off_market", "sold"],
+  },
   { key: "property_type", label: "Property type", type: "text" },
   { key: "year_built", label: "Year built", type: "number", step: "1" },
   { key: "image_url", label: "Image URL", type: "url" },
@@ -220,6 +226,9 @@ function HomePage() {
     sort: "price_asc" as "price_asc" | "price_desc" | "town",
   });
   const [filtersLoaded, setFiltersLoaded] = useState(false);
+  const [hiddenAnalysisIds, setHiddenAnalysisIds] = useState<Set<number>>(
+    new Set(),
+  );
 
   const saveManualTags = async (
     propertyId: number,
@@ -333,6 +342,9 @@ function HomePage() {
           min_bedrooms: config.search.minimum_bedrooms,
           max_price: config.search.maximum_price,
         }));
+        setHiddenAnalysisIds(
+          new Set(config.ui_filters?.hidden_analysis_ids ?? []),
+        );
         setFiltersLoaded(true);
         setPage({ status: "ready", initial: loaded });
         setScanStatus(scans);
@@ -549,8 +561,10 @@ function HomePage() {
 
   useEffect(() => {
     if (page.status !== "ready") return;
-    void saveUiFilters(propertyFilters).catch(() => undefined);
-  }, [filtersLoaded, page.status, propertyFilters]);
+    void saveUiFilters(propertyFilters, [...hiddenAnalysisIds]).catch(
+      () => undefined,
+    );
+  }, [filtersLoaded, hiddenAnalysisIds, page.status, propertyFilters]);
 
   function updateProfile<K extends keyof HouseholdProfile>(
     key: K,
@@ -784,11 +798,15 @@ function HomePage() {
           {scanStatus.latest_attempt?.source_runs.length ? (
             <div className="source-statuses">
               {scanStatus.latest_attempt.source_runs.map((run) => (
-                <span
-                  key={run.source}
-                  className={`source-status source-${run.status}`}
-                >
-                  {run.source}: {run.status.replaceAll("_", " ")}
+                <span key={run.source}>
+                  <span className={`source-status source-${run.status}`}>
+                    {run.source}: {run.status.replaceAll("_", " ")}
+                  </span>
+                  {run.error_summary && (
+                    <small className="source-status-error">
+                      {run.error_summary}
+                    </small>
+                  )}
                 </span>
               ))}
             </div>
@@ -828,6 +846,15 @@ function HomePage() {
           }
           onManualTagsChange={saveManualTags}
           onManualFactsChange={saveManualFacts}
+          hiddenAnalysisIds={hiddenAnalysisIds}
+          onToggleAnalysisHidden={(propertyId) =>
+            setHiddenAnalysisIds((current) => {
+              const next = new Set(current);
+              if (next.has(propertyId)) next.delete(propertyId);
+              else next.add(propertyId);
+              return next;
+            })
+          }
           analysisState={analysisState}
           analysisTargetPropertyId={analysisTargetPropertyId}
           analysisMessage={analysisMessage}
@@ -1125,6 +1152,8 @@ function PropertyResults({
   onAnalyzeProperty,
   onManualTagsChange,
   onManualFactsChange,
+  hiddenAnalysisIds,
+  onToggleAnalysisHidden,
   analysisState,
   analysisTargetPropertyId,
   analysisMessage,
@@ -1169,6 +1198,8 @@ function PropertyResults({
     propertyId: number,
     facts: ManualPropertyFacts,
   ) => Promise<void>;
+  hiddenAnalysisIds: Set<number>;
+  onToggleAnalysisHidden: (propertyId: number) => void;
   analysisState: "idle" | "running" | "error";
   analysisTargetPropertyId: number | null;
   analysisMessage: string;
@@ -1422,6 +1453,8 @@ function PropertyResults({
             onManualFactsChange={(facts) =>
               onManualFactsChange(property.id, facts)
             }
+            analysisHidden={hiddenAnalysisIds.has(property.id)}
+            onToggleAnalysisHidden={() => onToggleAnalysisHidden(property.id)}
             analysisDisabled={analysisState === "running"}
             analysisRunning={analysisTargetPropertyId === property.id}
             analysis={analysis.get(property.id)}
@@ -1549,6 +1582,8 @@ function PropertyCard({
   onAnalyze,
   onManualTagsChange,
   onManualFactsChange,
+  analysisHidden,
+  onToggleAnalysisHidden,
   analysisDisabled,
   analysisRunning,
   analysis,
@@ -1564,6 +1599,8 @@ function PropertyCard({
     categories: Record<ManualPropertyTag, ManualPropertyTagCategory>,
   ) => Promise<void>;
   onManualFactsChange: (facts: ManualPropertyFacts) => Promise<void>;
+  analysisHidden: boolean;
+  onToggleAnalysisHidden: () => void;
   analysisDisabled: boolean;
   analysisRunning: boolean;
   analysis?: AnalysisResult;
@@ -1720,6 +1757,9 @@ function PropertyCard({
       <span className={`retrieval-pill retrieval-${property.retrieval_status}`}>
         {property.retrieval_status === "retrieved" ? "Retrieved" : "Partial"}
       </span>
+      {property.status.display_value?.toLocaleLowerCase() === "pending" && (
+        <span className="listing-status-pill listing-status-pending">pending</span>
+      )}
       {property.image_url && imageAvailable ? (
         <img
           className="property-image"
@@ -1931,6 +1971,27 @@ function PropertyCard({
                     />
                   </label>
                 </div>
+              ) : option.type === "select" ? (
+                <label key={option.key}>
+                  {option.label}
+                  <select
+                    value={manualFactValues[option.key] ?? ""}
+                    disabled={manualFactState === "saving"}
+                    onChange={(event) =>
+                      setManualFactValues((current) => ({
+                        ...current,
+                        [option.key]: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Select status</option>
+                    {option.options?.map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               ) : (
                 <label key={option.key}>
                   {option.label}
@@ -2012,18 +2073,27 @@ function PropertyCard({
           disabled={analysisDisabled}
           onClick={onAnalyze}
         >
-          {analysisRunning ? "Analyzing…" : "LLM analysis"}
+          {analysisRunning ? "Analyzing…" : "LLM"}
         </button>
+        {analysis?.result && (
+          <button
+            className="history-toggle"
+            type="button"
+            onClick={onToggleAnalysisHidden}
+          >
+            {analysisHidden ? "Show" : "Hide"}
+          </button>
+        )}
         <button
           className="history-toggle"
           type="button"
           onClick={toggleHistory}
         >
-          {historyOpen ? "Hide history" : "History & sold comparables"}
+          {historyOpen ? "Hide history" : "History & comps"}
         </button>
       </div>
       {historyOpen && <PropertyHistoryPanel state={historyState} />}
-      {analysis?.result && (
+      {analysis?.result && !analysisHidden && (
         <div className="property-analysis">
           <div className="analysis-tabs">
             <button type="button" onClick={() => setAnalysisTab("result")}>

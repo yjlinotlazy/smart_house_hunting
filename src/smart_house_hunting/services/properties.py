@@ -202,7 +202,10 @@ def _compose_property(
             missing_fields.append(name)
         if not has_crawled_value and manual_value is not None:
             crawl_values.append(("manual", manual_value))
-        resolved[name], selected[name] = _resolve(crawl_values)
+        if name == "status" and manual_value is not None:
+            resolved[name], selected[name] = _resolve([("manual", manual_value)])
+        else:
+            resolved[name], selected[name] = _resolve(crawl_values)
     for name in ("property_type", "year_built"):
         crawl_values = [(source, state.facts.get(name)) for source, state in states]
         has_crawled_value = any(value not in (None, "") for _, value in crawl_values)
@@ -302,6 +305,15 @@ def list_properties(
             and state.facts.get("record_kind") != "sold_comparable"
             for listing in record.listings
         )
+        and not any(
+            (state := _latest_state(listing)) is not None
+            and state.status
+            and state.status.casefold() in {"sold", "off_market"}
+            and state.facts.get("record_kind") != "sold_comparable"
+            for listing in record.listings
+        )
+        and str((record.manual_facts or {}).get("status", "")).casefold()
+        not in {"sold", "off_market"}
     ]
     properties = [_compose_property(session, record, finance, config) for record in records]
     properties = [

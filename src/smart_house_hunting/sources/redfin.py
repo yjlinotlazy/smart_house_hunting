@@ -360,6 +360,11 @@ def _from_search_card(
         request.included_property_types[0] if len(request.included_property_types) == 1 else "other"
     )
     image_url = card.get("image_url")
+    card_text = " ".join(str(part) for part in card.get("text", []))
+    availability = str(offer.get("availability", ""))
+    status = "pending" if "PENDING" in card_text.upper() else "active"
+    if availability.upper().endswith(("SOLDOUT", "OUTOFSTOCK")):
+        status = "sold"
     facts = {
         "property_type": _property_type(residence) if residence else assumed_type,
         "image_urls": [image_url] if isinstance(image_url, str) and image_url else [],
@@ -377,7 +382,7 @@ def _from_search_card(
         latitude=_decimal(geo.get("latitude")),
         longitude=_decimal(geo.get("longitude")),
         price=_decimal(offer.get("price")),
-        status="active",
+        status=status,
         bedrooms=bedrooms,
         bathrooms=bathrooms,
         living_area_sqft=_integer(floor.get("value")),
@@ -455,8 +460,18 @@ def parse_detail_page(html: str, fallback: NormalizedListing) -> NormalizedListi
         ],
         "raw_crawled_data": listing,
     }
+    page_text = re.sub(r"<[^>]+>", " ", html).upper()
     availability = str(offer.get("availability", ""))
-    if availability.endswith("InStock"):
+    availability_upper = availability.upper()
+    if "SOLD" in availability_upper:
+        status = "sold"
+    elif (
+        re.search(r"\bPENDING\b", page_text)
+        or "PENDING" in availability_upper
+        or "UNDER_CONTRACT" in availability_upper
+    ):
+        status = "pending"
+    elif availability.endswith("InStock"):
         status = "active"
     elif availability.endswith(("SoldOut", "OutOfStock")):
         status = "off_market"
@@ -645,6 +660,7 @@ class RedfinSourceAdapter:
                     previous = previous_by_id.get(candidate.source_listing_id)
                     if (
                         previous is not None
+                        and previous.status == candidate.status
                         and detail_completed_today(previous)
                         and not request.force_refresh
                     ):

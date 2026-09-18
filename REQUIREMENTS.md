@@ -2,12 +2,14 @@
 
 ## 1. Product Scope
 
-Smart House Hunting is a local web application that helps one household find an owner-occupied home in Massachusetts.
+Smart House Hunting is a local web application that helps one household find an owner-occupied home or a rental home in Massachusetts.
 
 This is the permanent product scope, not an MVP limitation:
 
 - Single user and one shared household profile.
-- Owner-occupied homes only. No rental or investment-property workflows.
+- The application has two completely independent modes: Buy and Rent. Buy is the default mode.
+- Buy mode covers owner-occupied homes. Rent mode covers residential rental homes. The modes do not mix listings, filters, statuses, scan results, or UI state.
+- Investment-property workflows are outside this project's scope.
 - Massachusetts only.
 - One or more target Massachusetts cities/towns are configured by the user.
 - The web server listens on `localhost`, port `7004`, by default. Publishing it beyond localhost is outside this project's scope.
@@ -31,6 +33,7 @@ The configuration contains operational settings, including:
 - Financial-model assumptions.
 - The default down-payment percentage used when no household profile has been saved yet.
 - One or more included property types. The default local selection is `single_family` only.
+- Rental preferences, including desired move-in date and lease term, are stored in the same household profile/configuration but are used only by Rent mode.
 
 The home page links to a separate local configuration page. It defaults to a
 user-friendly sectioned form and can switch to a complete raw YAML editor. Fields
@@ -114,6 +117,13 @@ For conflicting displayed facts, source priority is Redfin first, Zillow second,
 
 ## 4. User-Controlled Workflow
 
+The home page has two independent tabs:
+
+- Buy is the default tab and contains the purchase workflow.
+- Rent contains only rental listings and rental filters. Switching tabs never mixes buy and rental results, filters, statuses, or scan state.
+
+Both tabs use the configured Massachusetts municipalities, property types, and enabled listing sources unless a mode-specific rule says otherwise.
+
 The application separates public-data scanning from LLM analysis. Saving the profile alone does not scan sources or call an LLM.
 
 ### 4.1 `GO`: Scan and Initial Selection
@@ -178,7 +188,29 @@ By default, cached analysis is reused when both the profile and relevant propert
 
 The page displays the last LLM analysis time separately from the last scan time.
 
-### 4.3 Forced Reanalysis
+LLM analysis is available only in Buy mode. Rent mode does not call an LLM and does not display LLM analysis controls or results.
+
+### 4.3 Rent Workflow
+
+Rent mode uses Redfin, Zillow, and Realtor and stores rental results independently from Buy mode.
+
+Rent mode has these independent search inputs:
+
+- Maximum monthly rent.
+- Minimum bedrooms.
+- Minimum bathrooms.
+- Desired move-in date.
+- Desired lease term.
+
+Pet requirements are not part of the rental workflow.
+
+Rental cards retain source links, provenance, manual tags, manual fields, selection, and history behavior, but only within Rent mode. They show monthly rent and HOA separately, plus their sum as the monthly housing cost. HOA uses the same normalized monthly HOA field as Buy mode.
+
+Rental statuses are limited in the visible UI: `active` listings remain visible, while every other status is retained in the database and hidden from the Rent tab.
+
+Rent mode displays monthly rental cost only. It does not calculate mortgage, down payment, property tax, or purchase affordability.
+
+### 4.4 Forced Reanalysis
 
 A `Force reanalysis` checkbox is displayed beside the LLM button.
 

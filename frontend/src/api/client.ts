@@ -178,6 +178,7 @@ export type PropertyFilters = {
   min_bathrooms?: string;
   built_after?: string;
   sort?: "price_asc" | "price_desc" | "town";
+  hidden_analysis_ids?: number[];
 };
 
 export type PropertyEvent = {
@@ -375,10 +376,11 @@ export function loadConfig(): Promise<PublicConfig> {
 
 export function saveUiFilters(
   filters: PropertyFilters,
+  hidden_analysis_ids: number[],
 ): Promise<PropertyFilters> {
   return request<PropertyFilters>("/api/settings/ui-filters", {
     method: "PUT",
-    body: JSON.stringify(filters),
+    body: JSON.stringify({ ...filters, hidden_analysis_ids }),
   });
 }
 
@@ -459,7 +461,8 @@ export function loadProperties(
 ): Promise<{ properties: PropertyResult[]; count: number }> {
   const parameters = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
-    if (value) parameters.set(key, value);
+    if (key === "hidden_analysis_ids") continue;
+    if (typeof value === "string" && value) parameters.set(key, value);
   }
   const query = parameters.size ? `?${parameters.toString()}` : "";
   return request<{ properties: PropertyResult[]; count: number }>(

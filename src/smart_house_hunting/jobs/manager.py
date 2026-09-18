@@ -322,15 +322,19 @@ class ScanManager:
                         )
                 except Exception as error:
                     failures += 1
+                    detail = str(error).strip().replace("\n", " ")[:300]
                     summary = f"Source scan failed ({type(error).__name__})"
+                    if detail:
+                        summary += f": {detail}"
                     source_status = "partial_failed" if source_counters.candidates else "failed"
                     logger.exception(
-                        "source %s job_id=%s source=%s persisted=%s error_type=%s",
+                        "source %s job_id=%s source=%s persisted=%s error_type=%s error=%s",
                         source_status,
                         job_id,
                         source_name,
                         source_counters.candidates,
                         type(error).__name__,
+                        detail or "(no message)",
                     )
                     self._finish_source(
                         job_id,
@@ -407,6 +411,12 @@ class ScanManager:
             self._interrupt(job_id, "Server stopped before the scan completed")
             raise
         except Exception as error:
+            logger.exception(
+                "scan crashed job_id=%s error_type=%s error=%s",
+                job_id,
+                type(error).__name__,
+                str(error).strip().replace("\n", " ")[:300] or "(no message)",
+            )
             self._interrupt(
                 job_id,
                 f"Scan failed ({type(error).__name__})",

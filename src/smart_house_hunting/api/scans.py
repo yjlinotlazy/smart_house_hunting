@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -17,6 +18,7 @@ from smart_house_hunting.jobs.models import (
 )
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
+logger = logging.getLogger(__name__)
 
 
 def _manager(request: Request) -> ScanManager:
@@ -30,11 +32,20 @@ async def get_scan_status(request: Request) -> ScanStatusResponse:
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def start_scan(payload: StartScanRequest, request: Request) -> StartScanResponse:
+    logger.info("scan start requested force_refresh=%s", payload.force_refresh)
     try:
-        return await _manager(request).start(force_refresh=payload.force_refresh)
+        response = await _manager(request).start(force_refresh=payload.force_refresh)
+        logger.info(
+            "scan start accepted job_id=%s reused_active=%s",
+            response.job.id,
+            response.reused_active,
+        )
+        return response
     except ScanStartError as error:
+        logger.warning("scan start rejected error=%s", error)
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ConfigError as error:
+        logger.exception("scan start failed due to configuration error")
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 

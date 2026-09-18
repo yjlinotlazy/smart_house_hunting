@@ -141,6 +141,7 @@ class UiFilters(StrictModel):
     min_bathrooms: str = ""
     built_after: str = ""
     sort: Literal["price_asc", "price_desc", "town"] = "price_asc"
+    hidden_analysis_ids: list[int] = Field(default_factory=list)
 
 
 class ApplicationConfig(StrictModel):

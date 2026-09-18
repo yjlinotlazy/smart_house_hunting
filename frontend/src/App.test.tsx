@@ -420,7 +420,7 @@ test("loads local settings and saves edited profile content", async () => {
   fireEvent.click(
     screen.getByRole("checkbox", { name: "Hide tags: Corner lot" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "LLM analysis" }));
+  fireEvent.click(screen.getByRole("button", { name: "LLM" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/analyses",
@@ -457,9 +457,7 @@ test("loads local settings and saves edited profile content", async () => {
     screen.getByRole("heading", { name: "Listing digest" }),
   ).toBeInTheDocument();
   expect(screen.getByText(listingDigest.result.overview)).toBeInTheDocument();
-  fireEvent.click(
-    screen.getByRole("button", { name: "History & sold comparables" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "History & comps" }));
   expect(await screen.findByText("price change")).toBeInTheDocument();
   expect(screen.getByText("$850,000 → $800,000")).toBeInTheDocument();
   expect(screen.getByText(/not a price prediction/)).toBeInTheDocument();

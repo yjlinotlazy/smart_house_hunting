@@ -212,6 +212,8 @@ def _sold_history(record: dict[str, Any]) -> list[dict[str, object]]:
 
 def _status(value: Any) -> str | None:
     normalized = str(value or "").upper()
+    if any(word in normalized for word in ("PENDING", "UNDER_CONTRACT", "UNDER-CONTRACT")):
+        return "pending"
     if any(word in normalized for word in ("FOR_SALE", "ACTIVE", "COMING_SOON")):
         return "active"
     if "SOLD" in normalized:
@@ -587,6 +589,7 @@ class ZillowSourceAdapter:
                     previous = previous_by_id.get(candidate.source_listing_id)
                     if (
                         previous is not None
+                        and previous.status == candidate.status
                         and detail_completed_today(previous)
                         and not request.force_refresh
                     ):

@@ -198,6 +198,13 @@ h1 {
   font-weight: 750;
 }
 
+.source-status-error {
+  display: block;
+  max-width: 34rem;
+  margin-top: 0.2rem;
+  color: #8b2e26;
+}
+
 .scan-progress {
   display: grid;
   gap: 0.45rem;
@@ -576,6 +583,23 @@ h1 {
   color: #765514;
 }
 
+.listing-status-pill {
+  position: absolute;
+  z-index: 2;
+  top: 0.45rem;
+  right: 0.45rem;
+  padding: 0.24rem 0.48rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: lowercase;
+}
+
+.listing-status-pending {
+  background: #f4d6d2;
+  color: #8b2e26;
+}
+
 .property-selected {
   border-color: #4b805d;
   box-shadow: 0 0 0 3px rgb(75 128 93 / 12%);
@@ -875,14 +899,17 @@ h1 {
 }
 
 .property-card-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  flex-wrap: nowrap;
   gap: 0.65rem;
   margin-top: 0.85rem;
 }
 
 .property-card-controls button {
-  width: 100%;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
   padding: 0.65rem;
   border-radius: 0.7rem;
 }

@@ -286,6 +286,8 @@ def _from_card(card: dict[str, Any], municipality: str) -> NormalizedListing | N
     text = " ".join(card.get("text", []))
     price_match = _PRICE.search(text)
     image_url = card.get("image_url")
+    normalized_text = text.upper()
+    status = "pending" if "PENDING" in normalized_text or "UNDER CONTRACT" in normalized_text else "active"
     return NormalizedListing(
         source="realtor",
         source_listing_id=_listing_id(url),
@@ -295,7 +297,7 @@ def _from_card(card: dict[str, Any], municipality: str) -> NormalizedListing | N
         state=state_zip[0],
         postal_code=state_zip[1] if len(state_zip) > 1 else None,
         price=_decimal(price_match.group(1)) if price_match else None,
-        status="active",
+        status=status,
         bedrooms=_meta_number(card, "beds"),
         bathrooms=_meta_number(card, "baths"),
         living_area_sqft=_integer(_meta_number(card, "sqft")),
@@ -436,7 +438,12 @@ def parse_detail_page(html: str, fallback: NormalizedListing) -> NormalizedListi
     description = str(residence.get("description") or product.get("description") or "")
     bed_bath = _BED_BATH.search(description)
     availability = str(offer.get("availability", ""))
-    if availability.endswith("InStock"):
+    availability_upper = availability.upper()
+    if "SOLD" in availability_upper:
+        status = "sold"
+    elif "PENDING" in availability_upper or "UNDER_CONTRACT" in availability_upper:
+        status = "pending"
+    elif availability.endswith("InStock"):
         status = "active"
     elif availability.endswith(("SoldOut", "OutOfStock")):
         status = "off_market"
@@ -640,6 +647,7 @@ class RealtorSourceAdapter:
                     previous = previous_by_id.get(candidate.source_listing_id)
                     if (
                         previous is not None
+                        and previous.status == candidate.status
                         and detail_completed_today(previous)
                         and not request.force_refresh
                     ):
